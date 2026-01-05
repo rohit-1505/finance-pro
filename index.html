@@ -1,0 +1,1168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Finance Tracking Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@18.2.0",
+            "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+            "lucide-react": "https://esm.sh/lucide-react@0.263.1"
+        }
+    }
+    </script>
+    <style>
+        .fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+        .slide-up { animation: slideUp 0.3s ease-out; }
+        @keyframes slideUp { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+        body { background-color: #020617; color: #f8fafc; font-family: 'Inter', sans-serif; }
+        select option { background-color: #1e293b; color: white; }
+        input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useEffect, useMemo, useRef } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { 
+            Wallet, LayoutDashboard, ShoppingCart, ScrollText, 
+            PiggyBank, Plus, PlusCircle, Trash2, CheckCircle, Lock, 
+            Unlock, Download, TrendingUp, TrendingDown, Users, X,
+            Zap, Coffee, Fuel, Utensils, Save, Pencil, Check, 
+            Database, Upload, AlertTriangle, FileJson, Calendar, Filter, CalendarDays, Clock,
+            Receipt, AlertCircle, CheckCircle2, RotateCw, Target, Gauge, Minus, PieChart
+        } from 'lucide-react';
+
+        // --- STABLE CHART COMPONENT ---
+        const SimpleChart = ({ data }) => {
+            if (!data || data.length < 2) return <div className="h-full flex items-center justify-center text-gray-600 text-sm">Add transactions to see trends</div>;
+            const height = 200; const width = 600; const padding = 20;
+            const minBal = Math.min(...data.map(d => d.balance));
+            const maxBal = Math.max(...data.map(d => d.balance));
+            const range = maxBal - minBal || 1; 
+            const points = data.map((d, i) => {
+                const x = (i / (data.length - 1)) * (width - padding * 2) + padding;
+                const y = height - ((d.balance - minBal) / range) * (height - padding * 2) - padding;
+                return `${x},${y}`;
+            }).join(' ');
+            return (
+                <div className="w-full h-full overflow-hidden">
+                    <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full">
+                        <defs>
+                            <linearGradient id="gradient" x1="0" x2="0" y1="0" y2="1">
+                                <stop offset="0%" stopColor="#6366f1" stopOpacity="0.4" />
+                                <stop offset="100%" stopColor="#6366f1" stopOpacity="0" />
+                            </linearGradient>
+                        </defs>
+                        <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#374151" strokeWidth="1" />
+                        <polygon points={`${padding},${height-padding} ${points} ${width-padding},${height-padding}`} fill="url(#gradient)" />
+                        <polyline fill="none" stroke="#818cf8" strokeWidth="3" points={points} strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                </div>
+            );
+        };
+
+        const FinanceTracker = () => {
+            // ================= STATE =================
+            const [view, setView] = useState('dashboard');
+            const [loading, setLoading] = useState(true);
+            const [notification, setNotification] = useState(null);
+            
+            // Data
+            const [bankAccounts, setBankAccounts] = useState([]);
+            const [lendingRecords, setLendingRecords] = useState([]);
+            const [dailyExpenses, setDailyExpenses] = useState([]);
+            const [statement, setStatement] = useState([]); 
+            const [savings, setSavings] = useState([]);
+            const [customExpenses, setCustomExpenses] = useState([]);
+            const [bills, setBills] = useState([]); 
+            const [monthlyBudget, setMonthlyBudget] = useState(0); 
+            const [categoryBudgets, setCategoryBudgets] = useState({}); // NEW: Category Budgets
+            
+            // Dashboard State
+            const [quickPresets, setQuickPresets] = useState([]);
+            const [isEditingPresets, setIsEditingPresets] = useState(false);
+            const [lastBackupDate, setLastBackupDate] = useState(null);
+            const [chartRange, setChartRange] = useState('1M'); 
+            const [isEditingBudget, setIsEditingBudget] = useState(false); 
+            
+            // Savings State
+            const [savingMode, setSavingMode] = useState('deposit'); 
+
+            // Bill Edit State
+            const [editingBillId, setEditingBillId] = useState(null);
+
+            // Activity Filters
+            const [filterStartDate, setFilterStartDate] = useState('');
+            const [filterEndDate, setFilterEndDate] = useState('');
+
+            // Security
+            const [isAuthenticated, setIsAuthenticated] = useState(false);
+            const [passwordInput, setPasswordInput] = useState('');
+            const [showBalances, setShowBalances] = useState(false); 
+            const [balancePasswordInput, setBalancePasswordInput] = useState('');
+            const [showBalancePrompt, setShowBalancePrompt] = useState(false);
+
+            // Inputs
+            const [expenseInputs, setExpenseInputs] = useState({});
+            const [selectedExpenseAccount, setSelectedExpenseAccount] = useState('1'); 
+            const [newTransaction, setNewTransaction] = useState({ accountId: '1', amount: '', type: 'debit', reason: '', date: new Date().toISOString().split('T')[0] });
+            const [newLending, setNewLending] = useState({ personName: '', amount: '', date: new Date().toISOString().split('T')[0], notes: '' });
+            const [newSaving, setNewSaving] = useState({ amount: '', reason: '', date: new Date().toISOString().split('T')[0], accountId: '1' });
+            
+            // Budget Input
+            const [budgetInput, setBudgetInput] = useState({ category: '', amount: '' });
+
+            const [newBill, setNewBill] = useState({ 
+                name: '', 
+                amount: '', 
+                startDate: new Date().toISOString().split('T')[0], 
+                interval: 1, 
+                period: 'Months' 
+            });
+            
+            const fileInputRef = useRef(null);
+            const mainContentRef = useRef(null);
+            const LOGIN_PASSWORD = '9696';
+            const BALANCE_PIN = '9999';
+            
+            const defaultCategories = ['Breakfast', 'Lunch', 'Snack', 'Dinner', 'Petrol', 'Tea', 'Outing', 'Home', 'Bike Wash', 'Haircut', 'Gym', 'Recharge', 'Misc'];
+            
+            const getIconForSlot = (idx) => {
+                const icons = [Coffee, Fuel, Utensils, ShoppingCart];
+                return icons[idx] || Zap;
+            };
+
+            // ================= INIT & REPAIR =================
+            useEffect(() => {
+                const loadData = () => {
+                    try {
+                        const get = (key) => {
+                            const val = localStorage.getItem(key);
+                            return val ? JSON.parse(val) : null;
+                        };
+
+                        let loadedAccounts = get('bank-accounts');
+                        if (!Array.isArray(loadedAccounts) || loadedAccounts.length === 0) {
+                            loadedAccounts = [
+                                { id: '1', name: 'PNB', balance: 0 }, { id: '2', name: 'SBI', balance: 0 },
+                                { id: '3', name: 'IPPB', balance: 0 }, { id: '4', name: 'Cash', balance: 0 }
+                            ];
+                        } else {
+                            if (!loadedAccounts.find(a => a.id === '3')) loadedAccounts.push({ id: '3', name: 'IPPB', balance: 0 });
+                            if (!loadedAccounts.find(a => a.id === '4')) loadedAccounts.push({ id: '4', name: 'Cash', balance: 0 });
+                        }
+
+                        setBankAccounts(loadedAccounts);
+                        
+                        if(loadedAccounts.length > 0) {
+                            setSelectedExpenseAccount(loadedAccounts[0].id);
+                            setNewTransaction(prev => ({...prev, accountId: loadedAccounts[0].id}));
+                            setNewSaving(prev => ({...prev, accountId: loadedAccounts[0].id}));
+                        }
+
+                        setLendingRecords(Array.isArray(get('lending-records')) ? get('lending-records') : []);
+                        setDailyExpenses(Array.isArray(get('daily-expenses')) ? get('daily-expenses') : []);
+                        setStatement(Array.isArray(get('statement')) ? get('statement') : []);
+                        setSavings(Array.isArray(get('savings')) ? get('savings') : []);
+                        setBills(Array.isArray(get('bills')) ? get('bills') : []);
+                        setCategoryBudgets(get('category-budgets') || {});
+                        setLastBackupDate(get('last-backup-date') || null);
+                        setMonthlyBudget(parseFloat(get('monthly-budget')) || 0);
+                        
+                        const loadedCustom = get('custom-expenses');
+                        setCustomExpenses(Array.isArray(loadedCustom) ? loadedCustom : []);
+
+                        const loadedPresets = get('quick-presets');
+                        if (Array.isArray(loadedPresets) && loadedPresets.length === 4) {
+                            setQuickPresets(loadedPresets);
+                        } else {
+                            setQuickPresets([
+                                { label: 'Tea', amount: 10 },
+                                { label: 'Petrol', amount: 100 },
+                                { label: 'Lunch', amount: 80 },
+                                { label: 'Snack', amount: 20 }
+                            ]);
+                        }
+
+                    } catch (e) { 
+                        console.error("Data Load Error", e); 
+                        setBankAccounts([{ id: '1', name: 'PNB', balance: 0 }, { id: '2', name: 'SBI', balance: 0 }, { id: '3', name: 'IPPB', balance: 0 }, { id: '4', name: 'Cash', balance: 0 }]);
+                        setCustomExpenses([]); 
+                    }
+                    setLoading(false);
+                };
+                loadData();
+            }, []);
+
+            // Save Data
+            useEffect(() => {
+                if (!loading) {
+                    const set = (key, val) => localStorage.setItem(key, JSON.stringify(val));
+                    set('bank-accounts', bankAccounts);
+                    set('lending-records', lendingRecords);
+                    set('daily-expenses', dailyExpenses);
+                    set('statement', statement);
+                    set('savings', savings);
+                    set('custom-expenses', customExpenses);
+                    set('quick-presets', quickPresets);
+                    set('bills', bills);
+                    set('category-budgets', categoryBudgets);
+                    set('last-backup-date', lastBackupDate);
+                    set('monthly-budget', monthlyBudget);
+                }
+            }, [bankAccounts, lendingRecords, dailyExpenses, statement, savings, customExpenses, quickPresets, bills, categoryBudgets, lastBackupDate, monthlyBudget, loading]);
+
+            // Scroll to top
+            useEffect(() => {
+                if(mainContentRef.current) mainContentRef.current.scrollTop = 0;
+            }, [view]);
+
+            // Shortcuts
+            useEffect(() => {
+                const handleKeyDown = (e) => {
+                    if (!isAuthenticated) return;
+                    if (e.altKey && e.key === 'n') setView('bank-accounts');
+                    if (e.altKey && e.key === 'd') setView('dashboard');
+                    if (e.key === 'Escape') setShowBalancePrompt(false);
+                };
+                window.addEventListener('keydown', handleKeyDown);
+                return () => window.removeEventListener('keydown', handleKeyDown);
+            }, [isAuthenticated]);
+
+            const showNotification = (msg) => {
+                setNotification(msg);
+                setTimeout(() => setNotification(null), 3000);
+            };
+
+            // --- COMPUTED DATA ---
+            const chartData = useMemo(() => {
+                if(statement.length === 0) return [];
+                const reversed = [...statement].reverse();
+                let runningBalance = 0;
+                const history = reversed.map((txn) => {
+                    if (txn.type === 'credit') runningBalance += txn.amount;
+                    else runningBalance -= txn.amount;
+                    return { balance: runningBalance };
+                });
+                const count = chartRange === '1W' ? 7 : 30;
+                return history.slice(-count);
+            }, [statement, chartRange]);
+
+            const filteredTransactions = useMemo(() => {
+                return statement.filter(s => {
+                    const sDate = new Date(s.date).toISOString().split('T')[0];
+                    if (filterStartDate && sDate < filterStartDate) return false;
+                    if (filterEndDate && sDate > filterEndDate) return false;
+                    return true;
+                });
+            }, [statement, filterStartDate, filterEndDate]);
+
+            const savingsStats = useMemo(() => {
+                const now = new Date();
+                const todayStr = now.toISOString().split('T')[0];
+                const currentMonth = now.getMonth();
+                const currentYear = now.getFullYear();
+                const startOfWeek = new Date(now);
+                startOfWeek.setDate(now.getDate() - now.getDay());
+                startOfWeek.setHours(0, 0, 0, 0);
+
+                return savings.reduce((acc, curr) => {
+                    const sDate = new Date(curr.date);
+                    const sDateStr = curr.date.split('T')[0];
+                    if (sDateStr === todayStr) acc.today += curr.amount;
+                    if (sDate.getMonth() === currentMonth && sDate.getFullYear() === currentYear) acc.month += curr.amount;
+                    if (sDate >= startOfWeek) acc.week += curr.amount;
+                    return acc;
+                }, { today: 0, week: 0, month: 0 });
+            }, [savings]);
+
+            // --- CATEGORY SPENDING LOGIC ---
+            const categorySpending = useMemo(() => {
+                const now = new Date();
+                const currentMonth = now.getMonth();
+                const currentYear = now.getFullYear();
+                
+                const stats = {};
+                
+                // Initialize from dailyExpenses (Quick Spend)
+                dailyExpenses.forEach(exp => {
+                    const expDate = new Date(exp.date);
+                    if(expDate.getMonth() === currentMonth && expDate.getFullYear() === currentYear) {
+                        const cat = exp.category;
+                        if(!stats[cat]) stats[cat] = 0;
+                        stats[cat] += exp.amount;
+                    }
+                });
+                return stats;
+            }, [dailyExpenses]);
+
+            const budgetStats = useMemo(() => {
+                if (!monthlyBudget || monthlyBudget <= 0) return null;
+                const now = new Date();
+                const currentMonth = now.getMonth();
+                const currentYear = now.getFullYear();
+                const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+                const daysLeft = daysInMonth - now.getDate() + 1; 
+
+                const monthSpend = statement.reduce((total, txn) => {
+                    const txnDate = new Date(txn.date);
+                    if (txn.type === 'debit' && txnDate.getMonth() === currentMonth && txnDate.getFullYear() === currentYear) {
+                        return total + txn.amount;
+                    }
+                    return total;
+                }, 0);
+
+                const remaining = monthlyBudget - monthSpend;
+                const safeDaily = daysLeft > 0 ? (remaining / daysLeft) : 0;
+                const percentUsed = Math.min((monthSpend / monthlyBudget) * 100, 100);
+
+                return { monthSpend, remaining, daysLeft, safeDaily, percentUsed };
+            }, [statement, monthlyBudget]);
+
+            // --- BILL LOGIC CORE ---
+            const calculateNextDueDate = (bill) => {
+                const today = new Date();
+                today.setHours(0,0,0,0);
+                
+                const interval = parseInt(bill.interval || 1);
+                const period = bill.period || 'Months';
+
+                const addTime = (date) => {
+                    const newDate = new Date(date);
+                    if (period === 'Months') newDate.setMonth(newDate.getMonth() + interval);
+                    else if (period === 'Weeks') newDate.setDate(newDate.getDate() + (interval * 7));
+                    else if (period === 'Years') newDate.setFullYear(newDate.getFullYear() + interval);
+                    else if (period === 'Days') newDate.setDate(newDate.getDate() + interval);
+                    return newDate;
+                }
+
+                if (bill.lastPaid) return addTime(bill.lastPaid);
+                
+                const startDate = new Date(bill.startDate);
+                if (startDate > today) return startDate;
+
+                let nextDue = new Date(startDate);
+                while (nextDue < today) nextDue = addTime(nextDue);
+                return nextDue;
+            };
+
+            const groupedBills = useMemo(() => {
+                const today = new Date();
+                today.setHours(0,0,0,0);
+                const groups = { attention: [], thisWeek: [], later: [], paid: [] };
+
+                bills.forEach(bill => {
+                    const nextDue = calculateNextDueDate(bill);
+                    const diffTime = nextDue - today;
+                    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+                    const enhancedBill = { ...bill, nextDueDate: nextDue, diffDays };
+
+                    if (diffDays <= 0) groups.attention.push(enhancedBill); 
+                    else if (diffDays <= 7) groups.thisWeek.push(enhancedBill);
+                    else groups.later.push(enhancedBill);
+                });
+
+                const sortFn = (a, b) => a.nextDueDate - b.nextDueDate;
+                groups.attention.sort(sortFn);
+                groups.thisWeek.sort(sortFn);
+                groups.later.sort(sortFn);
+                
+                return groups;
+            }, [bills]);
+
+            // ================= HANDLERS =================
+            const handleLogin = (e) => { e.preventDefault(); if (passwordInput === LOGIN_PASSWORD) { setIsAuthenticated(true); setPasswordInput(''); } else { alert('Wrong password'); setPasswordInput(''); } };
+            const handleBalanceAuth = (e) => { e.preventDefault(); if (balancePasswordInput === BALANCE_PIN) { setShowBalances(true); setShowBalancePrompt(false); setBalancePasswordInput(''); } else { alert('Wrong PIN'); setBalancePasswordInput(''); } };
+
+            const handleBackup = () => {
+                const data = {
+                    version: 8, 
+                    timestamp: new Date().toISOString(),
+                    bankAccounts, lendingRecords, dailyExpenses, statement, savings, customExpenses, quickPresets, bills, monthlyBudget, categoryBudgets
+                };
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `finance_backup_${new Date().toISOString().split('T')[0]}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                setLastBackupDate(new Date().toLocaleString());
+                showNotification("Backup Downloaded!");
+            };
+
+            const triggerRestore = () => { if(fileInputRef.current) fileInputRef.current.click(); };
+            const handleRestore = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const data = JSON.parse(event.target.result);
+                        if(!data.bankAccounts || !data.statement) throw new Error("Invalid Backup");
+                        if(confirm("Overwrite ALL data with backup?")) {
+                            setBankAccounts(data.bankAccounts || []);
+                            setLendingRecords(data.lendingRecords || []);
+                            setDailyExpenses(data.dailyExpenses || []);
+                            setStatement(data.statement || []);
+                            setSavings(data.savings || []);
+                            setCustomExpenses(data.customExpenses || []);
+                            setBills(data.bills || []);
+                            setMonthlyBudget(data.monthlyBudget || 0);
+                            setCategoryBudgets(data.categoryBudgets || {});
+                            if(data.quickPresets) setQuickPresets(data.quickPresets);
+                            showNotification("Restored!");
+                            setView('dashboard');
+                        }
+                    } catch (err) { alert("Error: " + err.message); }
+                    e.target.value = null;
+                };
+                reader.readAsText(file);
+            };
+
+            const clearAllData = () => { 
+                if(confirm("DANGER: This will delete ALL data permanently. Are you sure?")) { 
+                    const input = prompt("Enter Login Password to confirm deletion:");
+                    if(input === LOGIN_PASSWORD) {
+                        localStorage.clear(); 
+                        location.reload(); 
+                    } else {
+                        alert("Incorrect Password. Data was NOT deleted.");
+                    }
+                } 
+            };
+
+            const executeTransaction = (accountId, amount, type, reason) => {
+                const amt = parseFloat(amount);
+                if (isNaN(amt) || amt <= 0) return false;
+                let validAccountId = accountId;
+                if (!bankAccounts.find(a => a.id === accountId)) {
+                    if(bankAccounts.length > 0) validAccountId = bankAccounts[0].id; else return false;
+                }
+                setBankAccounts(prev => prev.map(a => a.id === validAccountId ? { ...a, balance: type === 'credit' ? a.balance + amt : a.balance - amt } : a));
+                const accountName = bankAccounts.find(a => a.id === validAccountId)?.name || 'Unknown';
+                const entry = { id: Date.now().toString() + Math.random(), date: new Date().toISOString(), type, amount: amt, reason, account: accountName };
+                setStatement(prev => [entry, ...prev]);
+                return true;
+            };
+
+            // MODIFIED: Check Category Budget
+            const addExpense = (cat) => {
+                const amountVal = expenseInputs[cat];
+                if (!amountVal) return alert('Enter amount');
+                const amt = parseFloat(amountVal);
+                const reason = expenseInputs[`${cat}-reason`] || '';
+                
+                if (executeTransaction(selectedExpenseAccount, amt, 'debit', `${cat}: ${reason}`)) {
+                    setDailyExpenses(prev => [{ id: Date.now().toString(), category: cat, amount: amt, reason, date: new Date().toISOString() }, ...prev]);
+                    setExpenseInputs(prev => ({ ...prev, [cat]: '', [`${cat}-reason`]: '' }));
+                    
+                    // BUDGET CHECK
+                    const currentSpent = categorySpending[cat] || 0;
+                    const limit = categoryBudgets[cat] || 0;
+                    if(limit > 0 && (currentSpent + amt) > limit) {
+                        showNotification(`⚠️ Over Budget: ${cat}`);
+                    } else {
+                        showNotification(`Added: ₹${amt}`);
+                    }
+                }
+            };
+
+            const handleBatchSave = () => {
+                const cats = [...defaultCategories, ...customExpenses];
+                let count = 0; let totalAmt = 0;
+                cats.forEach(cat => {
+                    const val = expenseInputs[cat];
+                    if(val && parseFloat(val) > 0) {
+                        const amt = parseFloat(val);
+                        const reason = expenseInputs[`${cat}-reason`] || '';
+                        if(executeTransaction(selectedExpenseAccount, amt, 'debit', `${cat}: ${reason}`)) {
+                            setDailyExpenses(prev => [{ id: Date.now().toString() + Math.random(), category: cat, amount: amt, reason, date: new Date().toISOString() }, ...prev]);
+                            count++; totalAmt += amt;
+                        }
+                    }
+                });
+                if(count > 0) { setExpenseInputs({}); showNotification(`Batch Saved: ${count} items`); }
+            };
+
+            const batchTotal = useMemo(() => {
+                const cats = [...defaultCategories, ...customExpenses];
+                let total = 0; let count = 0;
+                cats.forEach(cat => { const val = expenseInputs[cat]; if(val && parseFloat(val) > 0) { total += parseFloat(val); count++; } });
+                return { total, count };
+            }, [expenseInputs, defaultCategories, customExpenses]);
+
+            const addQuickPreset = (item) => { executeTransaction(selectedExpenseAccount, item.amount, 'debit', `Quick: ${item.label}`); showNotification(`Added: ₹${item.amount}`); }
+            const handlePresetEdit = (index, field, value) => { const updated = [...quickPresets]; updated[index] = { ...updated[index], [field]: value }; setQuickPresets(updated); };
+
+            const addBankTransaction = () => {
+                if (!newTransaction.amount || !newTransaction.reason) return alert('Fill fields');
+                if (executeTransaction(newTransaction.accountId, newTransaction.amount, newTransaction.type, newTransaction.reason)) {
+                    setNewTransaction(prev => ({ ...prev, amount: '', reason: '' }));
+                    if(view !== 'dashboard') setView('dashboard');
+                    showNotification(`Transaction Added`);
+                }
+            };
+
+            const addLending = () => { if (!newLending.personName || !newLending.amount) return alert('Fill details'); setLendingRecords(prev => [{ id: Date.now().toString(), ...newLending, amount: parseFloat(newLending.amount), returned: false }, ...prev]); setNewLending({ ...newLending, personName: '', amount: '', notes: '' }); showNotification("Record added"); };
+            const toggleLending = (id) => setLendingRecords(prev => prev.map(r => r.id === id ? { ...r, returned: !r.returned } : r));
+            const deleteLending = (id) => { if(confirm('Delete?')) setLendingRecords(prev => prev.filter(r => r.id !== id)); };
+            const addCustomCategory = () => { const name = prompt("Name:"); if(name && name.trim() !== "") setCustomExpenses(prev => [...prev, name.trim()]); };
+            const removeCustomCategory = (cat) => { if(confirm(`Remove ${cat}?`)) setCustomExpenses(prev => prev.filter(c => c !== cat)); };
+            
+            const addSaving = () => { 
+                if (!newSaving.amount) return alert('Fill details'); 
+                let amt = parseFloat(newSaving.amount); 
+                if (savingMode === 'withdraw') { amt = -Math.abs(amt); } else { amt = Math.abs(amt); }
+                setSavings(prev => [{ id: Date.now().toString(), ...newSaving, amount: amt }, ...prev]); 
+                setNewSaving(prev => ({ ...prev, amount: '', reason: '' })); 
+                showNotification(savingMode === 'withdraw' ? "Withdrawn!" : "Saved!"); 
+            };
+            
+            const deleteSaving = (id) => { if(confirm('Delete?')) setSavings(prev => prev.filter(s => s.id !== id)); };
+            const deleteStatementItem = (id) => { if(confirm("Remove?")) setStatement(prev => prev.filter(s => s.id !== id)); };
+            const downloadCSV = () => { const headers = ["Date", "Type", "Amount", "Reason", "Account"]; const rows = statement.map(s => [new Date(s.date).toLocaleDateString(), s.type, s.amount, s.reason, s.account]); let csvContent = "data:text/csv;charset=utf-8," + headers.join(",") + "\n" + rows.map(e => e.join(",")).join("\n"); const link = document.createElement("a"); link.setAttribute("href", encodeURI(csvContent)); link.setAttribute("download", "finance_data.csv"); document.body.appendChild(link); link.click(); };
+
+            // --- BILL HANDLERS ---
+            const saveBill = () => {
+                if(!newBill.name || !newBill.amount || !newBill.startDate) return alert("Fill Name, Amount and Start Date");
+                if (editingBillId) {
+                    setBills(prev => prev.map(b => b.id === editingBillId ? { ...b, ...newBill, amount: parseFloat(newBill.amount) } : b));
+                    setEditingBillId(null);
+                    showNotification("Bill Updated");
+                } else {
+                    setBills(prev => [...prev, { id: Date.now().toString(), ...newBill, amount: parseFloat(newBill.amount), lastPaid: null }]);
+                    showNotification("Bill Added");
+                }
+                setNewBill({ name: '', amount: '', startDate: new Date().toISOString().split('T')[0], interval: 1, period: 'Months' });
+            };
+
+            const startEditBill = (bill) => { setNewBill({ name: bill.name, amount: bill.amount, startDate: bill.startDate, interval: bill.interval || 1, period: bill.period || 'Months' }); setEditingBillId(bill.id); };
+            const cancelEdit = () => { setEditingBillId(null); setNewBill({ name: '', amount: '', startDate: new Date().toISOString().split('T')[0], interval: 1, period: 'Months' }); }
+            const deleteBill = (id) => { if(confirm("Remove this bill?")) setBills(prev => prev.filter(b => b.id !== id)); };
+            const payBill = (bill) => {
+                if(executeTransaction(selectedExpenseAccount, bill.amount, 'debit', `Bill: ${bill.name}`)) {
+                    setBills(prev => prev.map(b => b.id === bill.id ? { ...b, lastPaid: new Date().toISOString() } : b));
+                    showNotification(`Paid ${bill.name}`);
+                }
+            };
+
+            const saveCategoryBudget = () => {
+                if(!budgetInput.category || !budgetInput.amount) return alert("Select Category and Amount");
+                setCategoryBudgets(prev => ({...prev, [budgetInput.category]: parseFloat(budgetInput.amount)}));
+                setBudgetInput({category: '', amount: ''});
+                showNotification("Budget Set");
+            };
+
+            const removeCategoryBudget = (cat) => {
+                if(confirm("Remove budget for " + cat + "?")) {
+                    const newBudgets = {...categoryBudgets};
+                    delete newBudgets[cat];
+                    setCategoryBudgets(newBudgets);
+                }
+            };
+
+            const BillItem = ({ bill, diff }) => (
+                <div className={`p-5 rounded-2xl border flex justify-between items-center transition mb-3 bg-gray-800/60 border-gray-700 shadow-lg`}>
+                    <div className="flex items-center gap-5">
+                        <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-lg bg-orange-500/10 text-orange-400`}>{new Date(bill.nextDueDate).getDate()}</div>
+                        <div>
+                            <div className="font-bold text-lg text-white flex items-center gap-2">
+                                {bill.name}
+                                <button onClick={() => startEditBill(bill)} className="text-gray-500 hover:text-white p-1"><Pencil size={12}/></button>
+                            </div>
+                            <div className="text-xs text-gray-500">
+                                {bill.interval > 1 ? `Every ${bill.interval} ${bill.period}` : `Every ${bill.period.slice(0, -1)}`} • {diff < 0 ? <span className="text-rose-400 font-bold">Overdue by {Math.abs(diff)} days</span> : diff === 0 ? <span className="text-orange-400 font-bold">Due Today!</span> : `Due in ${diff} days`}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-6">
+                        <span className="font-mono text-xl font-bold text-gray-300">₹{bill.amount.toLocaleString()}</span>
+                        <div className="flex gap-2">
+                            <button onClick={() => payBill(bill)} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-bold text-sm">Pay Now</button>
+                            <button onClick={() => deleteBill(bill.id)} className="p-2 text-gray-600 hover:text-rose-400"><Trash2 size={18}/></button>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            // ================= RENDER =================
+            if (!isAuthenticated) return (
+                <div className="min-h-screen flex items-center justify-center bg-gray-950">
+                    <div className="bg-gray-900 border border-gray-800 p-10 rounded-3xl w-full max-w-md shadow-2xl">
+                        <div className="flex justify-center mb-8"><div className="p-5 bg-indigo-500/10 rounded-2xl ring-1 ring-indigo-500/30"><Wallet className="text-indigo-400" size={48} /></div></div>
+                        <h1 className="text-3xl font-bold text-center text-white mb-2">Finance Pro</h1>
+                        <form onSubmit={handleLogin} className="space-y-5">
+                            <input type="password" value={passwordInput} onChange={e => setPasswordInput(e.target.value)} className="w-full bg-gray-950 border border-gray-700 text-white p-4 rounded-xl text-center text-2xl tracking-[0.5em] outline-none focus:border-indigo-500" placeholder="••••" autoFocus />
+                            <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-500 text-white p-4 rounded-xl font-bold">Unlock</button>
+                        </form>
+                    </div>
+                </div>
+            );
+
+            const SidebarItem = ({ id, label, icon: Icon }) => (
+                <button onClick={() => setView(id)} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all mb-1 group ${view === id ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:bg-gray-800'}`}>
+                    <Icon size={20} /> <span className="font-medium text-sm">{label}</span>
+                </button>
+            );
+
+            return (
+                <div className="flex h-screen overflow-hidden bg-[#0B1120] text-gray-100 font-sans selection:bg-indigo-500/30">
+                    {/* NOTIFICATION */}
+                    {notification && <div className="fixed top-6 right-6 z-50 bg-emerald-600 text-white px-6 py-3 rounded-xl shadow-2xl flex items-center gap-3 slide-up font-bold"><CheckCircle size={20} className="text-white"/> {notification}</div>}
+
+                    {/* SIDEBAR */}
+                    <aside className="w-72 bg-[#0F172A] border-r border-gray-800 flex flex-col shrink-0">
+                        <div 
+                            onClick={() => showBalances ? setShowBalances(false) : setShowBalancePrompt(true)} 
+                            className="p-8 pb-4 flex items-center gap-3 cursor-pointer hover:opacity-80 transition select-none group"
+                            title={showBalances ? "Click to Hide Balances" : "Click to Show Balances"}
+                        >
+                            <div className={`p-2 rounded-lg transition-colors ${showBalances ? 'bg-emerald-600' : 'bg-indigo-600'}`}>
+                                <Wallet size={20} className="text-white"/>
+                            </div>
+                            <span className="text-xl font-bold group-hover:text-white transition-colors">Finance Pro</span>
+                        </div>
+
+                        <div className="px-8 mb-6">
+                            <nav className="space-y-1">
+                                <SidebarItem id="dashboard" label="Dashboard" icon={LayoutDashboard} />
+                                <SidebarItem id="bank-accounts" label="Add Transaction" icon={Plus} />
+                                <SidebarItem id="daily-expenses" label="Quick Spend" icon={ShoppingCart} />
+                                <SidebarItem id="category-budgets" label="Category Budgets" icon={PieChart} />
+                                <SidebarItem id="bills" label="Bills & Subs" icon={Receipt} />
+                                <SidebarItem id="lending" label="Lending Manager" icon={Users} />
+                                <SidebarItem id="savings" label="Savings Goals" icon={PiggyBank} />
+                                <div className="pt-4 mt-4 border-t border-gray-800">
+                                     <SidebarItem id="database" label="Database" icon={Database} />
+                                </div>
+                            </nav>
+                        </div>
+                        <div className="mt-auto p-6 border-t border-gray-800">
+                            <button onClick={downloadCSV} className="w-full flex items-center justify-center gap-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-xs text-gray-300 py-3 rounded-lg"><Download size={14}/> Export Report (CSV)</button>
+                        </div>
+                    </aside>
+
+                    {/* MAIN */}
+                    <main ref={mainContentRef} className="flex-1 overflow-y-auto p-10 relative scroll-smooth">
+                        <header className="flex justify-between items-center mb-10">
+                            <div><h2 className="text-3xl font-bold text-white">{view === 'dashboard' ? 'Dashboard' : view === 'bank-accounts' ? 'New Transaction' : view === 'daily-expenses' ? 'Quick Spend' : view === 'lending' ? 'Lending Manager' : view === 'bills' ? 'Bills & Subscriptions' : view === 'database' ? 'Database Manager' : view === 'category-budgets' ? 'Category Budgets' : 'Savings'}</h2></div>
+                        </header>
+
+                        {showBalances && (
+                            <div className="grid grid-cols-4 gap-6 mb-10 fade-in">
+                                {bankAccounts.map(acc => (
+                                    <div key={acc.id} className="bg-gray-800/60 p-6 rounded-2xl border border-gray-700/50 shadow-xl">
+                                        <div className="text-[11px] text-gray-400 uppercase font-bold tracking-widest mb-2">{acc.name}</div>
+                                        <div className="text-3xl font-bold font-mono text-white">₹{acc.balance.toLocaleString()}</div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {/* DASHBOARD */}
+                        {view === 'dashboard' && (
+                            <div className="grid grid-cols-12 gap-8">
+                                <div className="col-span-8 space-y-8">
+                                    <div className="bg-gray-800/40 border border-gray-700/50 rounded-2xl p-6 h-80 flex flex-col">
+                                        <div className="flex items-center justify-between mb-4">
+                                            <h3 className="font-bold text-gray-200 text-sm flex items-center gap-2"><TrendingUp size={16} className="text-indigo-400"/> Trend</h3>
+                                            <div className="flex bg-gray-900 rounded-lg p-1 border border-gray-700">
+                                                <button onClick={() => setChartRange('1W')} className={`px-3 py-1 text-[10px] font-bold rounded-md transition ${chartRange === '1W' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>1W</button>
+                                                <button onClick={() => setChartRange('1M')} className={`px-3 py-1 text-[10px] font-bold rounded-md transition ${chartRange === '1M' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>1M</button>
+                                            </div>
+                                        </div>
+                                        <div className="flex-1 w-full"><SimpleChart data={chartData} /></div>
+                                    </div>
+
+                                    {/* RECENT ACTIVITY */}
+                                    <div className="bg-gray-800/40 border border-gray-700/50 rounded-2xl overflow-hidden">
+                                        <div className="p-4 border-b border-gray-700/50 flex flex-col md:flex-row justify-between items-center gap-4">
+                                            <h3 className="font-bold text-gray-200 text-sm">Recent Activity</h3>
+                                            <div className="flex items-center gap-2">
+                                                <div className="flex items-center gap-2 bg-gray-900 p-1.5 rounded-lg border border-gray-700/50">
+                                                    <Calendar size={14} className="text-gray-500 ml-1"/>
+                                                    <input type="date" className="bg-transparent text-[10px] text-gray-300 outline-none w-20" value={filterStartDate} onChange={e => setFilterStartDate(e.target.value)} />
+                                                    <span className="text-gray-600 text-[10px]">-</span>
+                                                    <input type="date" className="bg-transparent text-[10px] text-gray-300 outline-none w-20" value={filterEndDate} onChange={e => setFilterEndDate(e.target.value)} />
+                                                </div>
+                                                {(filterStartDate || filterEndDate) && (
+                                                    <button onClick={() => { setFilterStartDate(''); setFilterEndDate(''); }} className="p-1.5 bg-rose-500/10 text-rose-400 rounded-lg hover:bg-rose-500/20">
+                                                        <X size={14}/>
+                                                    </button>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div className="max-h-[400px] overflow-y-auto divide-y divide-gray-800/50">
+                                            {filteredTransactions.length === 0 ? <div className="p-10 text-center text-gray-600 text-sm">No activity found.</div> : 
+                                            filteredTransactions.map(s => (
+                                                <div key={s.id} className="p-4 flex justify-between items-center hover:bg-gray-800/50">
+                                                    <div className="flex items-center gap-4">
+                                                        <div className={`p-2.5 rounded-xl ${s.type === 'credit' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>{s.type === 'credit' ? <TrendingUp size={18}/> : <TrendingDown size={18}/>}</div>
+                                                        <div><div className="font-medium text-gray-200 text-sm">{s.reason}</div><div className="text-xs text-gray-500 mt-0.5">{new Date(s.date).toLocaleDateString()} • {s.account}</div></div>
+                                                    </div>
+                                                    <div className="flex items-center gap-4">
+                                                        <span className={`font-mono font-bold text-sm ${s.type === 'credit' ? 'text-emerald-400' : 'text-gray-300'}`}>{s.type === 'credit' ? '+' : '-'} ₹{s.amount.toLocaleString()}</span>
+                                                        <button onClick={() => deleteStatementItem(s.id)} className="text-gray-600 hover:text-rose-400 p-1"><Trash2 size={14}/></button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="col-span-4 space-y-6">
+                                    
+                                    {/* SMART BUDGET PULSE */}
+                                    <div className="bg-gradient-to-br from-gray-800 to-gray-900 border border-gray-700/50 rounded-2xl p-6 relative overflow-hidden">
+                                        <div className="flex justify-between items-start mb-4 relative z-10">
+                                            <div>
+                                                <h3 className="font-bold text-gray-200 text-sm flex items-center gap-2"><Target size={16} className="text-emerald-400"/> Smart Budget Pulse</h3>
+                                                <p className="text-[10px] text-gray-500 mt-1">Based on your monthly limit</p>
+                                            </div>
+                                            <button onClick={() => setIsEditingBudget(!isEditingBudget)} className="text-gray-500 hover:text-white transition"><Pencil size={14}/></button>
+                                        </div>
+
+                                        {isEditingBudget ? (
+                                            <div className="mb-4 animate-in fade-in zoom-in duration-200">
+                                                <label className="text-[10px] uppercase font-bold text-gray-500 block mb-2">Set Monthly Budget</label>
+                                                <div className="flex gap-2">
+                                                    <input type="number" className="w-full bg-black/30 border border-gray-600 rounded-lg p-2 text-white text-sm" value={monthlyBudget} onChange={e => setMonthlyBudget(parseFloat(e.target.value))} placeholder="0.00" />
+                                                    <button onClick={() => setIsEditingBudget(false)} className="bg-emerald-600 text-white px-3 rounded-lg"><Check size={16}/></button>
+                                                </div>
+                                            </div>
+                                        ) : budgetStats ? (
+                                            <div className="relative z-10">
+                                                <div className="flex justify-between items-end mb-2">
+                                                    <div>
+                                                        <div className="text-3xl font-bold text-white">₹{Math.max(0, budgetStats.safeDaily).toFixed(0)}</div>
+                                                        <div className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">Safe Daily Spend</div>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <div className="text-xs text-gray-400">Spent: ₹{budgetStats.monthSpend.toLocaleString()}</div>
+                                                        <div className="text-xs text-gray-400">Left: ₹{budgetStats.remaining.toLocaleString()}</div>
+                                                    </div>
+                                                </div>
+                                                
+                                                {/* Progress Bar */}
+                                                <div className="h-2 w-full bg-gray-700 rounded-full overflow-hidden mb-3">
+                                                    <div 
+                                                        className={`h-full rounded-full transition-all duration-500 ${budgetStats.percentUsed > 90 ? 'bg-rose-500' : budgetStats.percentUsed > 75 ? 'bg-orange-500' : 'bg-emerald-500'}`} 
+                                                        style={{ width: `${budgetStats.percentUsed}%` }}
+                                                    ></div>
+                                                </div>
+                                                
+                                                <div className="flex justify-between text-[10px] font-bold text-gray-500">
+                                                    <span>{budgetStats.percentUsed.toFixed(0)}% Used</span>
+                                                    <span>{budgetStats.daysLeft} Days Left</span>
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="text-center py-6 text-xs text-gray-500">
+                                                Set a budget to see your daily safe spend limit.
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* UPCOMING BILLS WIDGET */}
+                                    <div className="bg-gray-800/40 border border-gray-700/50 rounded-2xl p-6">
+                                        <h3 className="font-bold text-gray-200 text-sm flex items-center gap-2 mb-4"><Receipt size={16} className="text-orange-400"/> Upcoming Bills</h3>
+                                        <div className="space-y-3">
+                                            {[...groupedBills.attention, ...groupedBills.thisWeek].length === 0 && <div className="text-xs text-gray-500 text-center py-4">No urgent bills.</div>}
+                                            {[...groupedBills.attention, ...groupedBills.thisWeek].slice(0, 3).map(bill => {
+                                                const diff = bill.diffDays;
+                                                const statusColor = diff < 0 ? 'text-rose-400' : 'text-emerald-400';
+                                                
+                                                return (
+                                                    <div key={bill.id} className="flex justify-between items-center p-3 bg-gray-900/50 rounded-xl border border-gray-800">
+                                                        <div>
+                                                            <div className="text-xs font-bold text-gray-300">{bill.name}</div>
+                                                            <div className={`text-[10px] ${statusColor}`}>{diff < 0 ? 'Overdue' : diff === 0 ? 'Due Today' : `Due in ${diff} days`}</div>
+                                                        </div>
+                                                        <button onClick={() => payBill(bill)} className="text-xs font-bold bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 rounded-lg text-white">Pay ₹{bill.amount}</button>
+                                                    </div>
+                                                )
+                                            })}
+                                        </div>
+                                        <button onClick={() => setView('bills')} className="w-full text-center text-xs text-indigo-400 font-bold mt-4 hover:underline">Manage All Bills</button>
+                                    </div>
+
+                                    {/* QUICK SPEND */}
+                                    <div className="bg-gradient-to-br from-indigo-900/20 to-purple-900/20 border border-indigo-500/20 rounded-2xl p-6">
+                                        <div className="flex justify-between items-center mb-4">
+                                            <h3 className="font-bold text-indigo-200 text-sm flex items-center gap-2"><Zap size={16}/> Quick Spend</h3>
+                                            <div className="flex items-center gap-2">
+                                                <span className="text-[10px] text-gray-500 uppercase font-bold">From: {bankAccounts.find(a => a.id === selectedExpenseAccount)?.name}</span>
+                                                <button onClick={() => setIsEditingPresets(!isEditingPresets)} className="p-1.5 hover:bg-gray-800 rounded-lg text-gray-400 hover:text-white transition">
+                                                    {isEditingPresets ? <Check size={14} className="text-emerald-400"/> : <Pencil size={14}/>}
+                                                </button>
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            {quickPresets.map((item, idx) => {
+                                                const Icon = getIconForSlot(idx);
+                                                return isEditingPresets ? (
+                                                    <div key={idx} className="flex flex-col gap-2 p-2 bg-gray-800 border border-gray-600 rounded-xl">
+                                                        <input type="text" className="w-full bg-gray-900 text-white text-xs p-1.5 rounded border border-gray-700" value={item.label} onChange={(e) => handlePresetEdit(idx, 'label', e.target.value)} />
+                                                        <input type="number" className="w-full bg-gray-900 text-white text-xs p-1.5 rounded border border-gray-700" value={item.amount} onChange={(e) => handlePresetEdit(idx, 'amount', e.target.value)} />
+                                                    </div>
+                                                ) : (
+                                                    <button key={idx} onClick={() => addQuickPreset(item)} className="flex flex-col items-center justify-center gap-2 p-3 bg-gray-800/80 hover:bg-indigo-600 hover:text-white border border-gray-700/50 rounded-xl transition">
+                                                        <Icon size={20} className="text-gray-400 mb-1"/><span className="text-xs font-bold">{item.label}</span><span className="text-[10px] opacity-60">₹{item.amount}</span>
+                                                    </button>
+                                                )
+                                            })}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* CATEGORY BUDGETS VIEW */}
+                        {view === 'category-budgets' && (
+                            <div className="max-w-4xl mx-auto">
+                                <div className="grid grid-cols-12 gap-8">
+                                    <div className="col-span-4">
+                                        <div className="bg-gray-800/50 p-8 rounded-2xl border border-gray-700 sticky top-4">
+                                            <h3 className="font-bold text-white mb-6 flex items-center gap-2 text-lg"><Target size={20} className="text-purple-400"/> Set Budget</h3>
+                                            <div className="space-y-5">
+                                                <div>
+                                                    <label className="text-xs text-gray-500 uppercase font-bold mb-2 block">Category</label>
+                                                    <select className="w-full p-4 bg-gray-900 border border-gray-600 rounded-xl text-white outline-none focus:border-indigo-500" value={budgetInput.category} onChange={e => setBudgetInput({...budgetInput, category: e.target.value})}>
+                                                        <option value="">Select...</option>
+                                                        {[...defaultCategories, ...customExpenses].map(c => <option key={c} value={c}>{c}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div><label className="text-xs text-gray-500 uppercase font-bold mb-2 block">Monthly Limit (₹)</label><input type="number" className="w-full p-4 bg-gray-900 border border-gray-600 rounded-xl text-white outline-none focus:border-indigo-500 font-mono" value={budgetInput.amount} onChange={e => setBudgetInput({...budgetInput, amount: e.target.value})} /></div>
+                                                <button onClick={saveCategoryBudget} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-4 rounded-xl font-bold">Set Budget</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="col-span-8">
+                                        <div className="space-y-4">
+                                            {Object.keys(categoryBudgets).length === 0 && (
+                                                <div className="text-center py-20 bg-gray-800/20 rounded-2xl border border-gray-800 border-dashed text-gray-500">
+                                                    No category budgets set.
+                                                </div>
+                                            )}
+                                            {Object.entries(categoryBudgets).map(([cat, limit]) => {
+                                                const spent = categorySpending[cat] || 0;
+                                                const percent = Math.min((spent / limit) * 100, 100);
+                                                const color = percent > 100 ? 'bg-rose-500' : percent > 80 ? 'bg-orange-500' : 'bg-emerald-500';
+                                                
+                                                return (
+                                                    <div key={cat} className="bg-gray-800/40 p-5 rounded-2xl border border-gray-700/50">
+                                                        <div className="flex justify-between items-center mb-2">
+                                                            <div className="font-bold text-white text-lg">{cat}</div>
+                                                            <button onClick={() => removeCategoryBudget(cat)} className="text-gray-600 hover:text-rose-400"><Trash2 size={16}/></button>
+                                                        </div>
+                                                        <div className="h-3 w-full bg-gray-900 rounded-full overflow-hidden mb-2">
+                                                            <div className={`h-full rounded-full transition-all duration-500 ${color}`} style={{width: `${percent}%`}}></div>
+                                                        </div>
+                                                        <div className="flex justify-between text-xs">
+                                                            <span className="text-gray-400">Spent: <span className="text-white font-mono">₹{spent.toLocaleString()}</span></span>
+                                                            <span className="text-gray-400">Limit: <span className="text-white font-mono">₹{limit.toLocaleString()}</span></span>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* BILLS VIEW */}
+                        {view === 'bills' && (
+                            <div className="max-w-4xl mx-auto">
+                                <div className="grid grid-cols-12 gap-8">
+                                    {/* ADD/EDIT BILL FORM */}
+                                    <div className="col-span-4">
+                                        <div className="bg-gray-800/50 p-8 rounded-2xl border border-gray-700 sticky top-4">
+                                            <h3 className="font-bold text-white mb-6 flex items-center gap-2 text-lg"><Receipt size={20} className="text-orange-400"/> {editingBillId ? 'Edit Bill' : 'Add Bill'}</h3>
+                                            <div className="space-y-5">
+                                                <div><label className="text-xs text-gray-500 uppercase font-bold mb-2 block">Service Name</label><input type="text" placeholder="e.g. Netflix" className="w-full p-4 bg-gray-900 border border-gray-600 rounded-xl text-white outline-none focus:border-indigo-500" value={newBill.name} onChange={e => setNewBill({...newBill, name: e.target.value})} /></div>
+                                                <div><label className="text-xs text-gray-500 uppercase font-bold mb-2 block">Amount</label><input type="number" placeholder="0.00" className="w-full p-4 bg-gray-900 border border-gray-600 rounded-xl text-white outline-none focus:border-indigo-500 font-mono" value={newBill.amount} onChange={e => setNewBill({...newBill, amount: e.target.value})} /></div>
+                                                <div>
+                                                    <label className="text-xs text-gray-500 uppercase font-bold mb-2 block">Start Date</label>
+                                                    <input type="date" className="w-full p-4 bg-gray-900 border border-gray-600 rounded-xl text-white outline-none focus:border-indigo-500" value={newBill.startDate} onChange={e => setNewBill({...newBill, startDate: e.target.value})} />
+                                                </div>
+                                                <div>
+                                                    <label className="text-xs text-gray-500 uppercase font-bold mb-2 block">Repeats Every</label>
+                                                    <div className="flex gap-2">
+                                                        <input type="number" min="1" className="w-1/3 p-4 bg-gray-900 border border-gray-600 rounded-xl text-white outline-none text-center" value={newBill.interval} onChange={e => setNewBill({...newBill, interval: parseInt(e.target.value)})} />
+                                                        <select className="w-2/3 p-4 bg-gray-900 border border-gray-600 rounded-xl text-white outline-none" value={newBill.period} onChange={e => setNewBill({...newBill, period: e.target.value})}>
+                                                            <option value="Days">Days</option>
+                                                            <option value="Weeks">Weeks</option>
+                                                            <option value="Months">Months</option>
+                                                            <option value="Years">Years</option>
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <button onClick={saveBill} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-4 rounded-xl font-bold">{editingBillId ? 'Update Bill' : 'Add Subscription'}</button>
+                                                {editingBillId && <button onClick={cancelEdit} className="w-full bg-gray-800 hover:bg-gray-700 text-gray-300 py-3 rounded-xl font-bold mt-2">Cancel</button>}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* TIMEFRAME LIST */}
+                                    <div className="col-span-8 space-y-8">
+                                        {groupedBills.attention.length > 0 && (
+                                            <div>
+                                                <div className="flex items-center gap-2 mb-3 text-rose-400 font-bold text-sm uppercase tracking-wider">
+                                                    <AlertCircle size={16}/> Needs Attention
+                                                </div>
+                                                {groupedBills.attention.map(bill => <BillItem key={bill.id} bill={bill} diff={bill.diffDays} />)}
+                                            </div>
+                                        )}
+
+                                        {groupedBills.thisWeek.length > 0 && (
+                                            <div>
+                                                <div className="flex items-center gap-2 mb-3 text-orange-400 font-bold text-sm uppercase tracking-wider">
+                                                    <Calendar size={16}/> Due This Week
+                                                </div>
+                                                {groupedBills.thisWeek.map(bill => <BillItem key={bill.id} bill={bill} diff={bill.diffDays} />)}
+                                            </div>
+                                        )}
+
+                                        {groupedBills.later.length > 0 && (
+                                            <div>
+                                                <div className="flex items-center gap-2 mb-3 text-gray-400 font-bold text-sm uppercase tracking-wider">
+                                                    <Clock size={16}/> Upcoming Later
+                                                </div>
+                                                {groupedBills.later.map(bill => <BillItem key={bill.id} bill={bill} diff={bill.diffDays} />)}
+                                            </div>
+                                        )}
+
+                                        {bills.length === 0 && (
+                                            <div className="text-center py-20 bg-gray-800/20 rounded-2xl border border-gray-800 border-dashed text-gray-500">
+                                                No bills added yet. Start by adding one on the left.
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* OTHER VIEWS */}
+                        {view === 'bank-accounts' && (
+                            <div className="max-w-2xl mx-auto bg-gray-800/50 p-10 rounded-3xl border border-gray-700 shadow-2xl">
+                                <div className="grid grid-cols-2 gap-8 mb-8">
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-3">Type</label>
+                                        <div className="flex gap-3">
+                                            <button onClick={() => setNewTransaction({...newTransaction, type: 'debit'})} className={`flex-1 py-3 rounded-xl font-bold text-sm border transition ${newTransaction.type === 'debit' ? 'bg-rose-500/10 text-rose-400 border-rose-500/50' : 'bg-gray-800 border-gray-600 text-gray-400'}`}>Expense</button>
+                                            <button onClick={() => setNewTransaction({...newTransaction, type: 'credit'})} className={`flex-1 py-3 rounded-xl font-bold text-sm border transition ${newTransaction.type === 'credit' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/50' : 'bg-gray-800 border-gray-600 text-gray-400'}`}>Income</button>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-3">Account</label>
+                                        <select className="w-full p-3 bg-gray-900 border border-gray-700 rounded-xl text-gray-200 focus:border-indigo-500 outline-none h-[46px]" value={newTransaction.accountId} onChange={e => setNewTransaction({...newTransaction, accountId: e.target.value})}>
+                                            {bankAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                                        </select>
+                                    </div>
+                                </div>
+                                <div className="mb-8"><label className="block text-xs font-bold text-gray-500 uppercase mb-3">Amount</label><input type="number" placeholder="0.00" className="w-full p-5 bg-gray-900 border border-gray-700 rounded-2xl text-4xl font-mono text-white focus:border-indigo-500 outline-none" value={newTransaction.amount} onChange={e => setNewTransaction({...newTransaction, amount: e.target.value})} onKeyDown={(e) => e.key === 'Enter' && addBankTransaction()} /></div>
+                                <div className="mb-10"><label className="block text-xs font-bold text-gray-500 uppercase mb-3">Description</label><input type="text" placeholder="E.g. Monthly Rent" className="w-full p-4 bg-gray-900 border border-gray-700 rounded-xl text-white focus:border-indigo-500 outline-none" value={newTransaction.reason} onChange={e => setNewTransaction({...newTransaction, reason: e.target.value})} onKeyDown={(e) => e.key === 'Enter' && addBankTransaction()} /></div>
+                                <button onClick={addBankTransaction} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-4 rounded-xl font-bold text-lg shadow-lg">Save Record</button>
+                            </div>
+                        )}
+
+                        {view === 'daily-expenses' && (
+                            <div className="max-w-5xl mx-auto relative pb-24">
+                                <div className="bg-gray-800/60 p-5 rounded-2xl border border-gray-700 mb-8 flex justify-between items-center sticky top-0 z-20 backdrop-blur-md">
+                                    <div className="flex items-center gap-4">
+                                        <span className="text-gray-400 font-bold uppercase text-xs">Paying From:</span>
+                                        <select value={selectedExpenseAccount} onChange={e => setSelectedExpenseAccount(e.target.value)} className="bg-gray-900 text-white py-2 px-4 rounded-lg border border-gray-600 outline-none text-sm">
+                                            {bankAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                                        </select>
+                                    </div>
+                                    <button onClick={addCustomCategory} className="text-indigo-400 hover:text-indigo-300 text-sm font-bold flex items-center gap-2 px-3 py-1.5"><PlusCircle size={16}/> Add Category</button>
+                                </div>
+                                <div className="grid grid-cols-3 gap-5">
+                                    {[...defaultCategories, ...(Array.isArray(customExpenses) ? customExpenses : [])].map(cat => (
+                                        <div key={cat} className="bg-gray-800/40 p-5 rounded-2xl border border-gray-700/50 hover:border-indigo-500/50 hover:bg-gray-800/80 transition">
+                                            <div className="flex justify-between items-center mb-4">
+                                                <div className="font-bold text-gray-200">{cat}</div>
+                                                {customExpenses.includes(cat) && <button onClick={() => removeCustomCategory(cat)} className="text-rose-400 opacity-50 hover:opacity-100"><X size={14}/></button>}
+                                            </div>
+                                            <div className="flex gap-3">
+                                                <input 
+                                                    type="number" 
+                                                    placeholder="0" 
+                                                    className="w-full bg-gray-900 border border-gray-600/50 rounded-xl p-3 text-center text-white font-mono focus:border-indigo-500 outline-none" 
+                                                    value={expenseInputs[cat] || ''} 
+                                                    onChange={e => setExpenseInputs(prev => ({...prev, [cat]: e.target.value}))} 
+                                                />
+                                                <input 
+                                                    type="text" 
+                                                    placeholder="Note" 
+                                                    className="w-24 bg-gray-900 border border-gray-600/50 rounded-xl p-3 text-xs text-white focus:border-indigo-500 outline-none" 
+                                                    value={expenseInputs[`${cat}-reason`] || ''} 
+                                                    onChange={e => setExpenseInputs(prev => ({...prev, [`${cat}-reason`]: e.target.value}))} 
+                                                />
+                                                <button onClick={() => addExpense(cat)} className="bg-indigo-600 hover:bg-indigo-500 text-white p-3 rounded-xl shadow-lg active:scale-95 transition"><Plus size={18}/></button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                {batchTotal.count > 0 && (
+                                    <div className="fixed bottom-10 left-1/2 transform -translate-x-1/2 z-50 slide-up">
+                                        <button onClick={handleBatchSave} className="flex items-center gap-3 bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-4 rounded-full shadow-2xl font-bold text-lg border-2 border-indigo-400">
+                                            <Save size={24}/>
+                                            <span>Register All ({batchTotal.count})</span>
+                                            <span className="bg-indigo-800 px-3 py-1 rounded-full text-sm">₹{batchTotal.total}</span>
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {view === 'lending' && (
+                            <div className="grid grid-cols-12 gap-8">
+                                <div className="col-span-4">
+                                    <div className="bg-gray-800/50 p-8 rounded-2xl border border-gray-700 sticky top-4">
+                                        <h3 className="font-bold text-white mb-6 flex items-center gap-2 text-lg"><Users size={20} className="text-indigo-400"/> New Record</h3>
+                                        <div className="space-y-5">
+                                            <div><label className="text-xs text-gray-500 uppercase font-bold mb-2 block">Name</label><input type="text" className="w-full p-4 bg-gray-900 border border-gray-600 rounded-xl text-white outline-none focus:border-indigo-500" value={newLending.personName} onChange={e => setNewLending({...newLending, personName: e.target.value})} /></div>
+                                            <div><label className="text-xs text-gray-500 uppercase font-bold mb-2 block">Amount</label><input type="number" className="w-full p-4 bg-gray-900 border border-gray-600 rounded-xl text-white outline-none focus:border-indigo-500 font-mono" value={newLending.amount} onChange={e => setNewLending({...newLending, amount: e.target.value})} /></div>
+                                            <button onClick={addLending} className="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-4 rounded-xl font-bold">Add Record</button>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div className="col-span-8 space-y-4 pb-10">
+                                    {lendingRecords.length === 0 ? <div className="text-center text-gray-600 py-16 bg-gray-800/30 rounded-2xl border border-gray-800 border-dashed">No records.</div> : 
+                                    lendingRecords.map(r => (
+                                        <div key={r.id} className="bg-gray-800/40 p-5 rounded-2xl border border-gray-700/50 flex justify-between items-center hover:bg-gray-800 transition">
+                                            <div className="flex items-center gap-5">
+                                                <div className={`w-1.5 h-12 rounded-full ${r.returned ? 'bg-emerald-500' : 'bg-orange-500'}`}></div>
+                                                <div><div className="font-bold text-lg text-gray-100">{r.personName}</div><div className="text-xs text-gray-500 mt-1">{new Date(r.date).toLocaleDateString()}</div></div>
+                                            </div>
+                                            <div className="flex items-center gap-8"><span className="font-mono text-xl font-bold text-gray-300">₹{r.amount.toLocaleString()}</span><div className="flex gap-3"><button onClick={()=>toggleLending(r.id)} className="p-2.5 bg-gray-900 border border-gray-700 rounded-xl transition text-gray-500"><CheckCircle size={18}/></button><button onClick={()=>deleteLending(r.id)} className="p-2.5 bg-gray-900 border border-gray-700 rounded-xl transition text-gray-500"><Trash2 size={18}/></button></div></div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {view === 'savings' && (
+                            <div className="max-w-2xl mx-auto">
+                                <div className="grid grid-cols-3 gap-6 mb-8 fade-in">
+                                    <div className="bg-gray-800/60 p-6 rounded-2xl border border-gray-700/50 flex flex-col items-center justify-center text-center shadow-lg">
+                                        <div className="mb-2 p-2 bg-indigo-500/10 rounded-full"><Clock size={20} className="text-indigo-400"/></div>
+                                        <div className="text-gray-400 text-[10px] font-bold uppercase tracking-widest mb-1">Today</div>
+                                        <div className="text-2xl font-bold font-mono text-white">₹{savingsStats.today.toLocaleString()}</div>
+                                    </div>
+                                    <div className="bg-gray-800/60 p-6 rounded-2xl border border-gray-700/50 flex flex-col items-center justify-center text-center shadow-lg">
+                                        <div className="mb-2 p-2 bg-emerald-500/10 rounded-full"><CalendarDays size={20} className="text-emerald-400"/></div>
+                                        <div className="text-gray-400 text-[10px] font-bold uppercase tracking-widest mb-1">This Week</div>
+                                        <div className="text-2xl font-bold font-mono text-white">₹{savingsStats.week.toLocaleString()}</div>
+                                    </div>
+                                    <div className="bg-gray-800/60 p-6 rounded-2xl border border-gray-700/50 flex flex-col items-center justify-center text-center shadow-lg">
+                                        <div className="mb-2 p-2 bg-purple-500/10 rounded-full"><Calendar size={20} className="text-purple-400"/></div>
+                                        <div className="text-gray-400 text-[10px] font-bold uppercase tracking-widest mb-1">This Month</div>
+                                        <div className="text-2xl font-bold font-mono text-white">₹{savingsStats.month.toLocaleString()}</div>
+                                    </div>
+                                </div>
+
+                                <div className="bg-gray-800/50 p-8 rounded-3xl border border-gray-700 shadow-xl mb-10">
+                                    <h3 className="font-bold text-white mb-6 text-lg">{savingMode === 'deposit' ? 'Add to Savings' : 'Withdraw from Savings'}</h3>
+                                    
+                                    {/* DEPOSIT / WITHDRAW TOGGLE */}
+                                    <div className="flex bg-gray-900 p-1 rounded-xl mb-6">
+                                        <button onClick={() => setSavingMode('deposit')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition ${savingMode === 'deposit' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>Deposit</button>
+                                        <button onClick={() => setSavingMode('withdraw')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition ${savingMode === 'withdraw' ? 'bg-rose-600 text-white' : 'text-gray-400 hover:text-white'}`}>Withdraw</button>
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-5 mb-5">
+                                        <div><label className="text-xs text-gray-500 uppercase font-bold mb-2 block">Amount</label><input type="number" className="w-full p-4 bg-gray-900 border border-gray-600 rounded-xl text-white outline-none" value={newSaving.amount} onChange={e => setNewSaving({...newSaving, amount: e.target.value})} /></div>
+                                        <div><label className="text-xs text-gray-500 uppercase font-bold mb-2 block">Reason</label><input type="text" className="w-full p-4 bg-gray-900 border border-gray-600 rounded-xl text-white outline-none" value={newSaving.reason} onChange={e => setNewSaving({...newSaving, reason: e.target.value})} /></div>
+                                    </div>
+                                    <select className="w-full p-4 bg-gray-900 border border-gray-600 rounded-xl text-gray-300 mb-6 outline-none" value={newSaving.accountId} onChange={e => setNewSaving({...newSaving, accountId: e.target.value})}>{bankAccounts.map(a => <option key={a.id} value={a.id}>Account: {a.name}</option>)}</select>
+                                    <button onClick={addSaving} className={`w-full text-white py-4 rounded-xl font-bold transition ${savingMode === 'withdraw' ? 'bg-rose-600 hover:bg-rose-500' : 'bg-indigo-600 hover:bg-indigo-500'}`}>{savingMode === 'deposit' ? 'Save Money' : 'Take Out Money'}</button>
+                                </div>
+                                <div className="space-y-4">
+                                    {savings.map(s => (
+                                        <div key={s.id} className="bg-gray-800/40 p-5 rounded-2xl border border-gray-700/50 flex justify-between items-center">
+                                            <div className="flex items-center gap-5">
+                                                <div className={`p-3 rounded-full ${s.amount < 0 ? 'bg-rose-500/10 text-rose-400' : 'bg-indigo-500/10 text-indigo-400'}`}>
+                                                    {s.amount < 0 ? <Minus size={24}/> : <PiggyBank size={24}/>}
+                                                </div>
+                                                <div>
+                                                    <div className="font-bold text-white text-lg">{s.reason}</div>
+                                                    <div className="text-xs text-gray-500 mt-1">{new Date(s.date).toLocaleDateString()}</div>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-6">
+                                                <span className={`font-bold text-2xl ${s.amount < 0 ? 'text-rose-400' : 'text-indigo-400'}`}>
+                                                    {s.amount < 0 ? '-' : ''}₹{Math.abs(s.amount).toLocaleString()}
+                                                </span>
+                                                <button onClick={() => deleteSaving(s.id)} className="text-gray-600 hover:text-rose-400 transition p-2"><Trash2 size={20}/></button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {view === 'database' && (
+                            <div className="max-w-4xl mx-auto">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                    <div className="bg-gray-800/60 border border-gray-700 rounded-3xl p-8 flex flex-col items-center text-center hover:border-indigo-500 transition shadow-2xl">
+                                        <div className="bg-indigo-500/10 p-5 rounded-full mb-6"><FileJson size={40} className="text-indigo-400"/></div>
+                                        <h3 className="text-2xl font-bold text-white mb-2">Backup Data</h3>
+                                        <p className="text-gray-400 mb-8 text-sm">Download your entire financial history to a secure file. Save this file to keep your data safe from browser crashes.</p>
+                                        <button onClick={handleBackup} className="bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-4 rounded-xl font-bold w-full flex items-center justify-center gap-3"><Download size={20}/> Download Backup</button>
+                                        {lastBackupDate && <div className="mt-4 text-xs text-emerald-400 font-mono">Last Backup: {lastBackupDate}</div>}
+                                    </div>
+                                    <div className="bg-gray-800/60 border border-gray-700 rounded-3xl p-8 flex flex-col items-center text-center hover:border-emerald-500 transition shadow-2xl">
+                                        <div className="bg-emerald-500/10 p-5 rounded-full mb-6"><Upload size={40} className="text-emerald-400"/></div>
+                                        <h3 className="text-2xl font-bold text-white mb-2">Restore Data</h3>
+                                        <p className="text-gray-400 mb-8 text-sm">Lost your data? Upload your backup file here to restore everything instantly. This overwrites current data.</p>
+                                        <input type="file" ref={fileInputRef} onChange={handleRestore} accept=".json" className="hidden" />
+                                        <button onClick={triggerRestore} className="bg-emerald-600 hover:bg-emerald-500 text-white px-8 py-4 rounded-xl font-bold w-full flex items-center justify-center gap-3"><Upload size={20}/> Restore from File</button>
+                                    </div>
+                                </div>
+                                <div className="mt-12 bg-rose-900/10 border border-rose-900/30 rounded-2xl p-6 flex justify-between items-center">
+                                    <div className="flex items-center gap-4"><AlertTriangle size={24} className="text-rose-500"/><div><h4 className="font-bold text-rose-200">Reset Application</h4><p className="text-xs text-rose-400">This deletes all data from this browser permanently.</p></div></div>
+                                    <button onClick={clearAllData} className="px-5 py-2 bg-rose-950 hover:bg-rose-900 text-rose-400 border border-rose-800 rounded-lg text-sm font-bold">Clear Data</button>
+                                </div>
+                            </div>
+                        )}
+                    </main>
+
+                    {showBalancePrompt && (
+                        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50">
+                            <form onSubmit={handleBalanceAuth} className="bg-gray-900 p-8 rounded-3xl border border-gray-700 w-full max-w-sm text-center shadow-2xl relative">
+                                <button type="button" onClick={() => setShowBalancePrompt(false)} className="absolute top-4 right-4 text-gray-500 hover:text-white"><X size={20}/></button>
+                                <div className="mx-auto w-12 h-12 bg-gray-800 rounded-full flex items-center justify-center mb-4 text-white"><Lock size={20}/></div>
+                                <h3 className="font-bold text-xl mb-6 text-white">Enter PIN</h3>
+                                <input type="password" autoFocus className="w-full bg-gray-950 border border-indigo-500/30 p-4 rounded-xl text-center text-3xl mb-6 tracking-[0.5em] outline-none text-white focus:border-indigo-500 transition" value={balancePasswordInput} onChange={e => setBalancePasswordInput(e.target.value)} placeholder="••••"/>
+                                <button type="submit" className="w-full p-4 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-500 transition shadow-lg shadow-indigo-900/20">Unlock Balances</button>
+                            </form>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<FinanceTracker />);
+    </script>
+</body>
+</html>
